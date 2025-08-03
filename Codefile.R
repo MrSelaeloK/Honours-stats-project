@@ -225,6 +225,8 @@ estimate_roc_auc <- function(examples) {
   bins <- sort(as.integer(names(bin_weights)))
   
   # Off-diagonal contributions
+  #seq_along bins will generate a sequence corresponding to the bins
+  #for mismatching bins, the frequentist probability of a positive validation is matched with the probability of a    frequentist negative in another bin. Hence the term off diagonal.
   roc_auc <- 0
   for (i in seq_along(bins)) {
     for (j in (i + 1):length(bins)) {
@@ -236,6 +238,9 @@ estimate_roc_auc <- function(examples) {
   }
   
   # In-bin contributions (diagonal terms)
+  # looks at positive scores and negative scores and then returns them and if the score is missing, it is removed from the score list. 
+  # The next line is satisfied if there are no positive/negative scores.
+  #if they are there
   for (b in bins) {
     b <- as.character(b)
     pos_scores <- sapply(examples, function(e) if (e$bin == as.integer(b) && e$is_pos == 1) e$score else NA_real_)
@@ -246,6 +251,9 @@ estimate_roc_auc <- function(examples) {
     if (length(pos_scores) == 0 || length(neg_scores) == 0) next
     
     # Count how many times a positive score is greater than a negative
+    # Hits is a pairwise check that +ve > -ve. 
+    # bin_roc_auc is the probability that the pos_score are greater than the negative ones
+    # roc_auc is how they are then added in the end
     hits <- sum(outer(pos_scores, neg_scores, FUN = "-") > 0)
     bin_roc_auc <- hits / (length(pos_scores) * length(neg_scores))
     roc_auc <- roc_auc + bin_roc_auc * (p_bin_pos[[b]] %||% 0) * (p_bin_neg[[b]] %||% 0)
@@ -254,14 +262,17 @@ estimate_roc_auc <- function(examples) {
   return(roc_auc)
 }
 
-#Writing validation in log R 
+
+#Writing validation in log R - This part of the code works to eliminate duplicates. When a line is written to it with the same time stamp and it is duplicated, there is a replacement that happens.
 write_validation_log <- function(validation_examples, output_path, target_class) {
   filename <- paste0("validation_", target_class, ".csv")
   validation_log_filepath <- file.path(output_path, filename)
   
   # Deduplicate by (filename, timestamp_offset)
+  #examples_map creates a new environment
   examples_map <- new.env(hash = TRUE, parent = emptyenv())
   
+  #This stores the keys in the hash map for each item.
   if (file.exists(validation_log_filepath)) {
     existing <- load_validation_log(validation_log_filepath)
     for (ex in existing) {
@@ -285,8 +296,14 @@ write_validation_log <- function(validation_examples, output_path, target_class)
   return(validation_log_filepath)
 }
 
-#Prune random results in R
-prune_random_results <- function(results, all_scores, quantile_bounds, samples_per_bin) {
+#Prune random results in R- just for the size constraining and keeping only of samples per bin
+# if a bin has 
+
+prune_random_results <- function(results,
+                                 all_scores,
+                                 quantile_bounds,
+                                 samples_per_bin) {
+  
   value_bounds <- quantile(all_scores, quantile_bounds)
   num_bins <- length(quantile_bounds) - 1
   binned <- vector("list", num_bins)
@@ -312,8 +329,12 @@ prune_random_results <- function(results, all_scores, quantile_bounds, samples_p
   return(combined_results)
 }
 
+#This is the part i need to explain
 #convert_combined_results() in R
-convert_combined_results <- function(combined_results, target_class, quantile_bounds, value_bounds) {
+convert_combined_results <- function(combined_results,
+                                     target_class,
+                                     quantile_bounds,
+                                     value_bounds) {
   examples <- list()
   for (r in combined_results) {
     ex <- from_search_result(r, target_class, quantile_bounds, value_bounds)
@@ -332,9 +353,7 @@ get_random_sample_size <- function(quantile_bounds, samples_per_bin) {
 }
 
 
-
-
-
+# ----Making use of the code on data--------------------------------------------
 
 
 
