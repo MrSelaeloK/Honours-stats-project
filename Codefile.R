@@ -81,7 +81,7 @@ UtilsDataRSV::view_cols(Data2)
 
 
 
-# Chunk 4 - Call density estimation
+# -------Chunk 4 - Call density estimation-------------------------------------
 # infix operator, if a is not missing return a else return b. It is handling missing keys
 `%||%` <- function(a, b) if (!is.null(a)) a else b 
 
@@ -157,7 +157,7 @@ for (i in 1:nrow(examples)) {
 
 call.density = estimate_call_density(Data2,10000,0.1)
 
-beta(59,0.001)
+
 
 
 #---------call density estimate re-estimation-----------------------------------
@@ -228,19 +228,19 @@ out$Samples # still wrapping my heat around what the samples are supposed to be.
   
 
 
-
-
-
-
-
-
-
-
-
-
 #For low sample sizes 
-Booststrapping = function(){
+Booststrapping = function(data,desired_sample_size){
+  #how to bootstrap in R studio
+  #data = Data2
+  #desired_sample_size = 200
+  rows_to_add = desired_sample_size-nrow(data)
   
+  for( i in 1:rows_to_add){
+    index = sample(seq(from = 1, to = nrow(data)),1)
+    data = rbind(data,data[index,])
+  }
+  
+  return(data)
 }
 
 
