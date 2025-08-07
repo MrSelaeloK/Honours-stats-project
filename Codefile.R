@@ -2,11 +2,6 @@
 #-------------------------------------------------------------------------------
 library(readr)
 library(tidyverse)
-
-Data = read_csv("Abyssinian Nightjar validation results.csv")
-Data = data.frame(Data)
-UtilsDataRSV::view_cols(Data)
-
 #----Perch approach-------------------------------------------------------------
 #line 65 - 132 are not relevant when fake data is implemented
 #-----Chunk 1 - generating fake data--------------------------------------------
@@ -62,75 +57,6 @@ generate_fake_validation_data <- function(n = 100, bins = 5) {
 #debug(generate_fake_validation_data)
 fdata = generate_fake_validation_data(n = 100,
                                       bins= 5)
-
-#---------------- Binning the data----------------------------------------------
-bin_column = matrix(NA,nrow = nrow(Data), ncol = 1)
-bins = function(unbinned_data){
-  for(i in 1 : nrow(unbinned_data)){
-    if(Data$confidence[i]<=0.5){
-      bin_column[i]=1
-      next
-    }
-    if(Data$confidence[i]>0.5 && Data$confidence[i]<=0.75){
-      bin_column[i]=2
-      next
-    }
-    if(Data$confidence[i]>0.75 && Data$confidence[i]<=0.875){
-      bin_column[i]=3
-      next
-    }
-    else{
-      bin_column[i]=4
-    }
-  }
-  return(bin_column)
-}
-bins(Data)
-
-Data1 = mutate(Data,bins(Data))    #Binned data
-names(Data1)[11] <- "binNumber"    #Renaming of an item in the bin
-UtilsDataRSV::view_cols(Data1)
-
-
-
-#--------Bin weights: already redifined it so this may not be necessary--------- 
-binWeight = function(binned_data){
-  
-  numberOfBins = count(distinct(Data1, binNumber))
-  bin1Weight = count(filter(Data1,binNumber==1))/nrow(Data1)
-  bin2Weight = count(filter(Data1,binNumber==2))/nrow(Data1)
-  bin3Weight = count(filter(Data1,binNumber==3))/nrow(Data1)
-  bin4Weight = count(filter(Data1,binNumber==4))/nrow(Data1)
-  
-  weights = matrix(NA, nrow=nrow(binned_data), ncol = 1)
-  for(i in 1 : nrow(binned_data)){
-    if(binned_data$binNumber[i]==1){
-      weights[i]=bin1Weight
-      next
-    }
-    if(binned_data$binNumber[i]==2){
-      weights[i]=bin2Weight
-      next
-    }
-    if(binned_data$binNumber[i]==3){
-      weights[i]=bin3Weight
-      next
-    }
-    else{
-      weights[i]=bin4Weight
-    }
-  }
-  
-  weights = as.numeric(weights)
-  Data2 = mutate(binned_data,weights = weights)
-  return(Data2)
-}
-
-Data2 = binWeight(Data1)
-UtilsDataRSV::view_cols(Data2)
-
-#so the data that will be used for density estimation will be called Data2
-
 
 
 # -------Chunk 2 - Call density estimation-------------------------------------
@@ -207,6 +133,15 @@ out$Density_Estimate
 out$Samples # still wrapping my heat around what the samples are supposed to be.
 hist(out$Samples)
 
+#95% confidence interval from bootstrap distribution, Variance and standard deviation 
+confidence_interval = quantile(out$Samples, probs=c(0.025,0.975))
+Variance_bootstrap_samples = var(out$Samples)
+Sd_bootstrap_samples = sqrt(Variance_bootstrap_samples)
+
+
+cat("95% Confidence interval: [",round(confidence_interval,4),"]",
+    "\nvariance: ",round(Variance_bootstrap_samples,4),
+    "\nstandard deviation: ",round(Sd_bootstrap_samples,4))
 
 
 
