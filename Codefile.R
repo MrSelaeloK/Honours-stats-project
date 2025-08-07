@@ -8,10 +8,62 @@ Data = data.frame(Data)
 UtilsDataRSV::view_cols(Data)
 
 #----Perch approach-------------------------------------------------------------
-# Data binning
-# Will have to code for the binning of the data here
-# One to one mapping between the confidence and the logit so i will map it out that way
-# Data$confidence
+#line 65 - 132 are not relevant when fake data is implemented
+#-----Chunk 1 - generating fake data--------------------------------------------
+#generate fake data
+new_validation_example = function(filename,
+                                  timestamp_offset,
+                                  score, 
+                                  is_pos, 
+                                  bin, 
+                                  bin_weight) {
+  list(
+    filename = filename,
+    timestamp_offset = timestamp_offset,
+    score = score,
+    is_pos = is_pos,
+    bin = bin,
+    bin_weight = bin_weight
+  )
+}
+
+#Generating the fake data
+generate_fake_validation_data <- function(n = 100, bins = 5) {
+
+  scores = runif(n, 
+                 min = 0,
+                 max = 1)
+  quantile_bounds = seq(0,
+                        1,
+                        length.out = bins + 1)
+  bin_indices = findInterval(scores,
+                             quantile_bounds,
+                             rightmost.closed = TRUE)           #returns the bin number for each score
+  bin_weights = table(bin_indices) / n                          #gives the proportions in the different bins
+  bin_weights_vec = as.numeric(bin_weights[as.character(bin_indices)]) #gives the bin proportion associated with each score
+  
+  examples = vector("list",
+                    n)
+  
+  for (i in seq_len(n)) {
+    ex <- new_validation_example(
+      filename = paste0("file_", sample(1:10, 1), ".wav"),
+      timestamp_offset = runif(1, 0, 60),
+      score = scores[i],
+      is_pos = sample(c(1, -1, 0), 1, prob = c(0.4, 0.5, 0.1)),
+      bin = bin_indices[i],
+      bin_weight = bin_weights_vec[i]
+    )
+    examples[[i]] <- ex
+  }
+  return(examples)
+}
+
+#debug(generate_fake_validation_data)
+fdata = generate_fake_validation_data(n = 100,
+                                      bins= 5)
+
+#---------------- Binning the data----------------------------------------------
 bin_column = matrix(NA,nrow = nrow(Data), ncol = 1)
 bins = function(unbinned_data){
   for(i in 1 : nrow(unbinned_data)){
@@ -41,7 +93,7 @@ UtilsDataRSV::view_cols(Data1)
 
 
 
-#Bin weights
+#--------Bin weights: already redifined it so this may not be necessary--------- 
 binWeight = function(binned_data){
   
   numberOfBins = count(distinct(Data1, binNumber))
@@ -81,106 +133,31 @@ UtilsDataRSV::view_cols(Data2)
 
 
 
-# -------Chunk 4 - Call density estimation-------------------------------------
-# infix operator, if a is not missing return a else return b. It is handling missing keys
-`%||%` <- function(a, b) if (!is.null(a)) a else b 
-
-# bin_pos will be turns bin_pos (positive) into a list
-# bin_neg will turns bin_neg in each example into a list
-# bin weights are also turned into a list
-estimate_call_density <- function(examples, num_beta_samples = 10000 , beta_prior = 0.1) {
-  
-  # infix operator, if a is not missing return a else return b. It is handling missing keys
-  `%||%` <- function(a, b) if (!is.null(a)) a else b 
-  
-  bin_pos <- list()
-  bin_neg <- list()
-  bin_weights <- list()
-  #bin_unknown = list()
-  
-  # Collect positive/negative counts and weights
-  #b is the bin id
-  #bin_weights stores bin_weight at index key index b
-  #The if: if bin_pos is a positive id, bin_pos at key index b is assigned to 1 if value not missing
-  #So each bin will have a count of how many items reside within it
-examples = Data2
-
-#Collect positive/negative counts and weights
-for (i in 1:nrow(examples)) {
-  b <- as.character(examples$binNumber[i])  # convert to character for list indexing
-  w <- examples$weights[i]
-  
-  bin_weights[[b]] <- w
-  
-  if (examples$outcome[i] == 1) {
-    bin_pos[[b]] <- (bin_pos[[b]] %||% 0) + 1
-  } else if (examples$outcome[i] == -1) {
-    bin_neg[[b]] <- (bin_neg[[b]] %||% 0) + 1
-  }
-}
-  
-  # Maximum Likelihood Estimate of density
-  #density_ev, counter initially set to 0 
-  #p is the positive count
-  #n is the negative count
-  #w is the bin weight at the name b
-  #there is a small error added here
-  #reference to page 6 top left, The one about the law of total probability
-  density_ev <- 0
-  for (b in names(bin_weights)) {
-    p <- bin_pos[[b]] %||% 0
-    n <- bin_neg[[b]] %||% 0
-    w <- bin_weights[[b]]
-    density_ev <- density_ev + w * (p / (p + n + 1e-6))
-  }
-  
-  # Bayesian sampling using beta distributions
-  # num_beta_samples passed as a parameter up top.
-  # outer for loop: iterates through the num_beta_samples
-  # total is a counter set to 0
-  # Inner for loop: for each bin, p is set to positive, n is set to false classification and both are set to 0 if      there is nothing counted.
-  # will need an explanation of the total.
-  q_betas <- numeric(num_beta_samples)
-  for (i in 1:num_beta_samples) {
-    total <- 0
-    for (b in names(bin_weights)) {
-      p <- bin_pos[[b]] %||% 0
-      n <- bin_neg[[b]] %||% 0
-      w <- bin_weights[[b]]
-      total <- total + w * rbeta(1, p + beta_prior, n + beta_prior)
-    }
-    q_betas[i] <- total
-  }
-  
-  return(list(density_ev = density_ev, samples = q_betas))
-}
-
-call.density = estimate_call_density(Data2,10000,0.1)
-
-
-
-
-#---------call density estimate re-estimation-----------------------------------
+# -------Chunk 2 - Call density estimation-------------------------------------
+#the algorithm will work as long it is supplied with data that is not binned and weighted but is validated binning and weighting happen within the function.
 call_density = function(examples,num_beta_samples=1000,beta_prior=0.1){
   #examples = Data2
-  
+  examples = unlist(examples)
+  df <- as.data.frame(do.call(rbind, fdata), stringsAsFactors = FALSE) #This will be the one that i check my bin and bin_weight generation against. 
+  examples = as.data.frame(do.call(rbind, fdata), stringsAsFactors = FALSE)
+  examples = rename(examples,binNumber=bin, outcome = is_pos)
+
   #infinix operator
   `%||%` <- function(a, b) if (!is.null(a)) a else b 
   
   #Positive/negative bin counts
-  bin_positive = matrix(NA,nrow = 4, ncol = 2)
-  bin_negative = matrix(NA,nrow = 4, ncol = 2)
-  bin_number  = as.matrix(distinct(examples,binNumber))
+  bin_number  = as.matrix(distinct(examples,binNumber)) 
+  bin_number = as.matrix(sort(as.numeric(as.vector(bin_number[,1]))))
   bin_weights = matrix(NA, nrow = nrow(bin_number),ncol=1)
+  bin_positive = matrix(NA,nrow = nrow(bin_number), ncol = 2)
+  bin_negative = matrix(NA,nrow = nrow(bin_number), ncol = 2)
   
   #Bin weights
   for(i in 1:nrow(bin_number)){
     bin_weights[i,1]=nrow(filter(examples,binNumber==i))/nrow(examples)
   }
   
-  
   #Putting in the counts of each bin (positive/negative)
-  # i do not know
   for(i in 1:nrow(bin_number)){
     examples2 = filter(examples,binNumber==i)
     bin_positive[i,2] = as.numeric(count(filter(examples2,outcome==1)))
@@ -190,8 +167,7 @@ call_density = function(examples,num_beta_samples=1000,beta_prior=0.1){
   
 
 #Density  
-  #will have to use positive beta weights
-  # Create beta distributions.
+  # Create beta distributions for each bin.
   shape.parameters = matrix(NA,ncol=2,nrow=nrow(bin_number))
   
   for (b in bin_number){
@@ -200,48 +176,38 @@ call_density = function(examples,num_beta_samples=1000,beta_prior=0.1){
     )
   }
   
-#MLE of positive rate in each bin
-  density_eval = 0
-    for(j in 1:nrow(bin_number)){
-    density_eval = density_eval = bin_weights[j] * bin_positive[j,2] /
-      (bin_positive[j,2] + bin_negative[j,2] + 1e-6)
+  
+  #density estimation
+  shape.parameters
+  density = 0 
+  for(i in 1:nrow(shape.parameters)){
+    density = density + rbeta(1,shape.parameters[i,1]+beta_prior,
+                             shape.parameters[i,2]+beta_prior)*bin_weights[i,1]
   }
+
     
-#probability of a positive outcome. Supposed to be the probability of bin b given outcome
+#Bootstrapping: To get distribution of density estimate
   q_betas=c()
   NoBetaSamples = 10000
   for(i in 1:NoBetaSamples){
     for(j in 1:nrow(bin_number)){
       rvalue = 0
-      rvalue = rvalue + rbeta(1,shape.parameters[j,1],shape.parameters[j,2])
+      rvalue = rvalue + rbeta(1,shape.parameters[j,1],
+                              shape.parameters[j,2])
     }
     q_betas=c(q_betas,rvalue)
   }
-  return(list(Density_Estimate = density_eval,
+  return(list(Density_Estimate = density,
               Samples = q_betas))
 }
-  
-out = call_density(Data2,1000,0.1)  
-  
+
+#Implementation of call density  
+out = call_density(fdata,1000,0.1)  
 out$Density_Estimate
 out$Samples # still wrapping my heat around what the samples are supposed to be.
-  
+hist(out$Samples)
 
 
-#For low sample sizes 
-Booststrapping = function(data,desired_sample_size){
-  #how to bootstrap in R studio
-  #data = Data2
-  #desired_sample_size = 200
-  rows_to_add = desired_sample_size-nrow(data)
-  
-  for( i in 1:rows_to_add){
-    index = sample(seq(from = 1, to = nrow(data)),1)
-    data = rbind(data,data[index,])
-  }
-  
-  return(data)
-}
 
 
 
