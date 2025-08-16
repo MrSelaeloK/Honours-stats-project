@@ -98,13 +98,11 @@ study_level_data = rbind(fdata,fdata2)
 #the algorithm will work as long it is supplied with data that is not binned and weighted but is validated binning and weighting happen within the function.
 Study_level_call_density = function(examples,num_beta_samples=1000,beta_prior=0.1){
   #examples = Data2
-  examples = unlist(examples)
+  examples = unlist(fdata)
   df <- as.data.frame(do.call(rbind, fdata), stringsAsFactors = FALSE) #This will be the one that i check my bin and bin_weight generation  
   examples = as.data.frame(do.call(rbind, fdata), stringsAsFactors = FALSE)
   examples = rename(examples,binNumber=bin, outcome = is_pos)
 
-  #infinix operator
-  `%||%` <- function(a, b) if (!is.null(a)) a else b 
   
   #Positive/negative bin counts
   bin_number  = as.matrix(distinct(examples,binNumber)) 
@@ -194,8 +192,6 @@ Strat1_call_density = function(examples, num_beta_samples=1000, beta_prior=0.1){
   examples = as.data.frame(do.call(rbind, fdata), stringsAsFactors = FALSE)
   examples = rename(examples,binNumber=bin, outcome = is_pos)
 
-  #infinix operator
-  `%||%` <- function(a, b) if (!is.null(a)) a else b 
   
   #Positive/negative bin counts
   bin_number  = as.matrix(distinct(examples,binNumber)) 
@@ -212,12 +208,14 @@ Strat1_call_density = function(examples, num_beta_samples=1000, beta_prior=0.1){
 #Density  
   #makes use of study level data
   #shape.parameters
-  density = 0 
+  density_matrix = matrix(NA,nrow=nrow(bin_number), ncol =1)
+ 
   
   for(i in 1:nrow(out$beta_parameters)){
-    density = density + rbeta(1,out$beta_parameters[i,1]+beta_prior,
+    density_matrix[i,1] =  rbeta(1,out$beta_parameters[i,1]+beta_prior,
                               out$beta_parameters[i,2]+beta_prior)*bin_weights[i,1]
   }
+  density = sum(density_matrix)
 
     
 #Bootstrapping: To get distribution of density estimate
@@ -232,7 +230,8 @@ Strat1_call_density = function(examples, num_beta_samples=1000, beta_prior=0.1){
     q_betas=c(q_betas,rvalue)
   }
   return(list(Density_Estimate = density,
-              Samples = q_betas))
+              Samples = q_betas,
+              bin_densities = density_matrix))
 }
 
 #Implementation of strategy 1 call density  
@@ -255,85 +254,87 @@ cat("95% Confidence interval: [",round(confidence_interval,4),"]",
 #P(b|+)
 Strat2_call_density = function(examples, num_beta_samples = 1000,beta_prior = 0.1){
   examples = unlist(examples)
-  df <- as.data.frame(do.call(rbind, fdata), stringsAsFactors = FALSE) #This will be the one that i check my bin and bin_weight generation  
-  examples = as.data.frame(do.call(rbind, fdata), stringsAsFactors = FALSE)
+  df <- as.data.frame(do.call(rbind, fdata),
+                      stringsAsFactors = FALSE) #This will be the one that i check my bin and bin_weight generation  
+  
+  examples = as.data.frame(do.call(rbind, fdata),stringsAsFactors = FALSE)
   examples = rename(examples,binNumber=bin, outcome = is_pos)
   
-  #infinix operator
-  `%||%` <- function(a, b) if (!is.null(a)) a else b 
-  
-  #Positive/negative bin counts
+  #Positive/negative bin counts at the site level
   bin_number  = as.matrix(distinct(examples,binNumber)) 
   bin_number = as.matrix(sort(as.numeric(as.vector(bin_number[,1]))))
   bin_weights = matrix(NA, nrow = nrow(bin_number),ncol=1)
+  bin_positive = matrix(NA,nrow = nrow(bin_number), ncol = 2)
+  bin_negative = matrix(NA,nrow = nrow(bin_number), ncol = 2)
   
-  
-  #Bin weights
+  #Bin weights site level
   for(i in 1:nrow(bin_number)){
     bin_weights[i,1]=nrow(filter(examples,binNumber==i))/nrow(examples)
   }
+  
+  #Putting in the counts of each bin (positive/negative)
+  for(i in 1:nrow(bin_number)){
+    examples2 = filter(examples,binNumber==i)
+    bin_positive[i,2] = as.numeric(count(filter(examples2,outcome==1)))
+    bin_negative[i,2] = as.numeric(count(filter(examples2,outcome==-1)))
+  }
+  bin_positive[,1]=bin_number ; bin_negative[,1] = bin_number
+  
   
   #Density  calculations
   #Calculation of P(+|b)P(b)/P(+)
   b_given_pos = out$densities/out$Density_Estimate
   
   #Calculation of P(-|b)P(b)/P(-)
+  # for the neg i have to get into each bin and find the proportion of negative examples
   neg_densities = matrix(NA,nrow = nrow(bin_number),
                          ncol =1)
   
   for( i in 1:nrow(bin_number)){
     neg_densities[i,1] = rbeta(1,out$beta_parameters[i,2] + beta_prior,
-                              out$beta_parameters[i,1] + beta_prior)
+                              out$beta_parameters[i,1] + beta_prior)*bin_weights[i,1]
   }
+  
   
   b_given_neg = neg_densities / sum(neg_densities)
   
   
   #Density  
-  # Create beta distributions for each bin.
-  shape.parameters_site = matrix(NA,ncol=2,nrow=nrow(bin_number))
-  
-  for (b in bin_number){
-    shape.parameters_site[b,] = c(
-      bin_positive[b,2] + beta_prior, bin_negative[b,2] + beta_prior
-    )
-  }
-  
   
   # site density estimation P_s(+)
-  shape.parameters
+  shape.parameters_site
   density_matrix = matrix(NA,nrow = nrow(bin_number),ncol = 1)
-  for(i in 1:nrow(shape.parameters)){
-    density_matrix[i,1] = rbeta(1,shape.parameters[i,1]+beta_prior,
-                                shape.parameters[i,2]+beta_prior)*bin_weights[i,1]
+  for(i in 1:nrow(shape.parameters_site)){
+    density_matrix[i,1] = rbeta(1,out$beta_parameters[i,1]+beta_prior,
+                                out$beta_parameters[i,2]+beta_prior)*bin_weights[i,1]
   }
   
  # P_s(+)
   prob_b_s = b_given_pos*density_matrix + b_given_neg * (1- density_matrix)
   
   
-  #Q_q(b)
+  #KL divergence with Q_q(b)
   q_seq = seq(0.0001,0.9999,length.out = 100)
   
-  Q_q_b = b_given_pos*q_seq[1] + b_given_neg * (1-q_seq[1])
+  Q_q_b = b_given_pos * q_seq[1] + b_given_neg * (1-q_seq[1])
   KL_div.old = sum(prob_b_s*(log(prob_b_s)-log(Q_q_b)))
   Site_density = NA
-  
   
   for (i in 2:length(q_seq)){
     Q_q_b = b_given_pos*q_seq[i] + b_given_neg * (1-q_seq[i])
     KL_div = sum(prob_b_s*(log(prob_b_s)-log(Q_q_b)))
-    if (KL_div <=KL_div.old){
+    if (KL_div <= KL_div.old){
       KL_div.old = KL_div
       Site_density = q_seq[i]
     }
   }
   
-  
   return(Density_Estimate = Site_density)
 }
 
 Strat2_call_density(fdata,1000,0.1)
+
+
 
 #-------------------------Strategy 3 -------------------------------------------
 Strat3_call_density = function(density1, density2){
