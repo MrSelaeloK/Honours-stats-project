@@ -23,11 +23,11 @@ new_validation_example = function(filename,
 }
 
 #Generating the fake data
-generate_fake_validation_data <- function(n = 100, bins = 5) {
+generate_fake_validation_data = function(n = 100, bins = 5) {
 
-  scores = runif(n, 
-                 min = 0,
-                 max = 1)
+  scores = runif(n,min = 0,max = 1)
+  #scores = rexp(1,rate =3)
+  #scores = scores[scores<=1]
   quantile_bounds = seq(0,
                         1,
                         length.out = bins + 1)
@@ -41,24 +41,24 @@ generate_fake_validation_data <- function(n = 100, bins = 5) {
                     n)
   
   for (i in seq_len(n)) {
-    ex <- new_validation_example(
+    ex = new_validation_example(
       filename = paste0("file_", sample(1:10, 1), ".wav"),
       timestamp_offset = runif(1, 0, 60),
       score = scores[i],
-      is_pos = sample(c(1, -1, 0), 1, prob = c(0.4, 0.5, 0.1)),
+      is_pos = sample(c(1, -1, 0), 1, prob = c(0.55, 0.35, 0.1)),
       bin = bin_indices[i],
       bin_weight = bin_weights_vec[i]
     )
-    examples[[i]] <- ex
+    examples[[i]] = ex
   }
   return(examples)
 }
 
 generate_fake_validation_data2 <- function(n = 100, bins = 5) {
   
-  scores = runif(n, 
-                 min = 0,
-                 max = 1)
+  scores = runif(n,min = 0,max = 1)
+  #scores = rexp(1,rate =4)
+  #scores = scores[scores<=1]
   quantile_bounds = seq(0,
                         1,
                         length.out = bins + 1)
@@ -86,9 +86,9 @@ generate_fake_validation_data2 <- function(n = 100, bins = 5) {
 }
 
 #debug(generate_fake_validation_data)
-fdata = generate_fake_validation_data(n = 100,
+fdata = generate_fake_validation_data(n = 2000,
                                       bins= 5)
-fdata2 = generate_fake_validation_data2(n = 100,
+fdata2 = generate_fake_validation_data2(n = 2000,
                                        bins= 5)
 
 study_level_data = rbind(fdata,fdata2)
@@ -253,63 +253,9 @@ cat("95% Confidence interval: [",round(confidence_interval,4),"]",
     "\nstandard deviation: ",round(Sd_bootstrap_samples,4))
 
 #---------Strategy 2------------------------------------------------------------
-Strat2_call_density = function(examples, num_beta_samples = 1000,beta_prior = 0.1){
-  
-  #restructuring of data to make it usable
-  examples = unlist(examples)
-  df = as.data.frame(do.call(rbind, fdata),stringsAsFactors = FALSE) 
-  examples = as.data.frame(do.call(rbind, fdata),stringsAsFactors = FALSE)
-  examples = rename(examples,binNumber=bin, outcome = is_pos)
-  
-  #P_s(b) site level probability of bin
-  #Probability of bin given positive identification. Collected from study level
-  Prob.bin.given.pos = out$densities/sum(out$densities)
-  
-  #Site level density taken from strategy 1
-  Strat1.Site.densities = out1$bin_densities
-  
-  #Study level Probability of a bin given negative count
-  Prob.bin.given.neg = matrix(out$negative_counts[,2]/sum(out$negative_counts[,2]),
-                              ncol = 1)
-  
-  #1 - Site level density taken from strategy 1
-  One.less.site.density = 1-Strat1.Site.densities
-  
-  #Probability of site level bin 
-  Prob.site.level.bin = Prob.bin.given.pos*Strat1.Site.densities + Prob.bin.given.neg*One.less.site.density
-  
-  
-  #Q_s(b) for arbitrary mixture of positives and negatives
-  seq.of.q = seq(0,1,length.out = 100)
-  
-  Qs = list()
-  
-  for( i in 1:length(seq.of.q)){
-    qs = Prob.bin.given.pos*seq.of.q[i] + Prob.bin.given.neg*(1-seq.of.q[i])
-    Qs[[length(Qs) + 1]] = qs
-  }
-  
-  
-  #KL divergence
-  min.and.q = matrix(NA,nrow = length(seq.of.q),ncol=2)
-  
-  for(i in 1:length(seq.of.q)){
-  min.and.q[i,1] = sum(Prob.site.level.bin*(log(Prob.site.level.bin)-log(Qs[[i]])))
-  min.and.q[i,2] = seq.of.q[i]
-  
-  }
-  
-  seq.of.q[which.min(min.and.q[,1])]
-}
-
-Strat2_call_density(fdata,1000,0.1)
-
-
-
-# Strategy 2 that works but do not know wny mine is not working
 Strat2_call_density <- function(site_examples, study_fit = out, eps = 1e-12) {
   # 1) SITE: empirical P_s(b)
-  site_examples = fdata
+  #site_examples = fdata
   site_df = as.data.frame(do.call(rbind, site_examples),
                           stringsAsFactors = FALSE) |> 
     dplyr::rename(binNumber = bin)
@@ -348,22 +294,48 @@ Strat2_call_density <- function(site_examples, study_fit = out, eps = 1e-12) {
   q_seq[which.min(KL_vals)]
 }
 
+bootstrap_strat2_site <- function(site_examples, study_fit,
+                                  Bdraws = 2000, 
+                                  conf = 0.95, 
+                                  eps = 1e-12) {
+  
+  n = length(site_examples)
+  
+  point = Strat2_call_density(site_examples, 
+                              study_fit = study_fit,
+                              eps = eps)
+  
+ 
+  
+  boots = numeric(Bdraws)
+  for (b in seq_len(Bdraws)) {
+    idx = sample.int(n, n, replace = TRUE)
+    boots[b] = Strat2_call_density(site_examples[idx],
+                                   study_fit = study_fit,
+                                   eps = eps)
+  }
+  
+  alpha = (1 - conf) / 2
+  ci = as.numeric(quantile(boots, probs = c(alpha, 1 - alpha)))
+  return(list(point = point, se = sd(boots),
+              conf_int = ci, 
+              samples = boots, 
+              conf = conf))
+}
+
 
 Strat2_call_density(fdata,study_fit = out,eps = 1e-12)
+out2 = bootstrap_strat2_site(fdata,out,Bdraws = 2000, conf = 0.95, eps = 1e-12)
 
+hist(out2$samples)
+out2$conf_int
+out$Density_Estimate
 
 #-------------------------Strategy 3 -------------------------------------------
 Strat3_call_density = function(density1, density2){
   density_estimate = (density1 * density2)^(1/2)
   return (Density_estimate = density_estimate)
 }
-
-Strat3_call_density(Strat1_call_density(fdata,
-                                        10000,
-                                        0.1)$Density_Estimate,
-                    Strat2_call_density(fdata,
-                                        10000,
-                                        0.1))
 
 #it works need to figure out why and how
 Strat3_call_density(Strat1_call_density(fdata,
@@ -373,10 +345,60 @@ Strat3_call_density(Strat1_call_density(fdata,
 
 
 
+#Bootstrapping and confidence intervals
+bootstrap_strat3_site = function(site_examples,
+                                 study_fit,
+                                 Bdraws = 2000,
+                                 conf = 0.95,
+                                 eps = 1e-12) {
+  
+  # --- deterministic S1 (no randomness) ---
+  strat1_point_internal = function(site_examples, study_fit, eps) {
+    
+    site_df = as.data.frame(do.call(rbind, site_examples), stringsAsFactors = FALSE)
+    names(site_df)[names(site_df) == "bin"] = "binNumber"
+    site_df$binNumber = as.numeric(site_df$binNumber)
+    
+    B = nrow(study_fit$beta_parameters)
+    Ps_b = sapply(1:B, function(b) mean(site_df$binNumber == b))
+    Ps_b = pmax(Ps_b, eps)
+    Ps_b = Ps_b / sum(Ps_b)
+    
+    alpha = study_fit$beta_parameters[,1]
+    beta  = study_fit$beta_parameters[,2]
+    E_pos_given_b = alpha / (alpha + beta)
+    
+    sum(E_pos_given_b * Ps_b)
+  }
+  
+  # --- Strategy 3 point estimate ---
+  s1 = strat1_point_internal(site_examples, study_fit, eps)
+  s2 = Strat2_call_density(site_examples, study_fit = study_fit, eps = eps)
+  point = sqrt(s1 * s2)
+  
+  # --- Bootstrap samples ---
+  n = length(site_examples)
+  boots = numeric(Bdraws)
+  for (b in seq_len(Bdraws)) {
+    idx = sample.int(n, n, replace = TRUE)
+    s1_b = strat1_point_internal(site_examples[idx],
+                                 study_fit,
+                                 eps)
+    s2_b = Strat2_call_density(site_examples[idx],
+                               study_fit = study_fit,
+                               eps = eps)
+    boots[b] = sqrt(s1_b * s2_b)
+  }
+  
+  # --- Percentile CI ---
+  alpha = (1 - conf) / 2
+  ci = as.numeric(quantile(boots, probs = c(alpha, 1 - alpha)))
+  
+  list(point = point, samples = boots, se = sd(boots), conf_int = ci, conf = conf)
+}
 
-
-
-
+out3 = bootstrap_strat3_site(fdata,out,Bdraws = 2000, conf = 0.95, eps = 1e-12)
+hist(out3$samples)
 
 
 
