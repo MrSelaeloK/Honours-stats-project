@@ -2,127 +2,94 @@
 library(readr)
 library(tidyverse)
 library(ggplot2)
+library(kableExtra)
+library(gridExtra)
+library(grid)
 
 ################################################################################
 #                                 The datasets                                 #
 ################################################################################
 
-#-----Chunk 1 - generating fake data--------------------------------------------
-#generate fake data 1
-new_validation_example = function(filename,
-                                  timestamp_offset,
-                                  score, 
-                                  is_pos, 
-                                  bin, 
-                                  bin_weight) {
-  list(
-    filename = filename,
-    timestamp_offset = timestamp_offset,
-    score = score,
-    is_pos = is_pos,
-    bin = bin,
-    bin_weight = bin_weight
-  )
+#-----------------------------The datasets loading--------------------------------------
+# === SETTINGS ===
+folder_path <- "32KHz_raw_data"   # 🔹 Change this
+output_file <- "combinedhz32Khz.csv"
+
+# === STEP 1: Get all .txt files ===
+files <- list.files(folder_path, pattern = "\\.txt$", full.names = TRUE)
+
+# === STEP 2: Read each file safely ===
+read_file_safe <- function(f) {
+  message("Reading file: ", f)
+  df <- read_delim(f, delim = "\t", col_types = cols(.default = "c"))
+  df$source_file <- basename(f)
+  return(df)
 }
 
-generate_fake_validation_data = function(n = 100, bins = 5) {
-  scores = rexp(n,rate =6)
-  scores = scores/max(scores)                                   # to make sure it <= 1
-  quantile_bounds = seq(0,1,length.out = bins + 1)
-  
-  bin_indices = findInterval(scores,
-                             quantile_bounds,
-                             rightmost.closed = TRUE)           #returns the bin number for each score
-  
-  bin_weights = table(bin_indices) / n                          #gives the proportions in the different bins
-  bin_weights_vec = as.numeric(bin_weights[as.character(bin_indices)]) #gives the bin proportion associated with each score
-  
-  examples = vector("list",n)
-  
-  for (i in seq_len(n)) {
-    ex = new_validation_example(
-      filename = paste0("file_", sample(1:10, 1), ".wav"),
-      timestamp_offset = runif(1, 0, 60),
-      score = scores[i],
-      is_pos = sample(c(1, -1, 0), 1, prob = c(0.10, 0.8, 0.1)),
-      bin = bin_indices[i],
-      bin_weight = bin_weights_vec[i]
-    )
-    examples[[i]] = ex
-  }
-  return(examples)
-}
+data_all <- map(files, read_file_safe)
 
-generate_fake_validation_data2 = function(n = 100, bins = 5) {
-  scores = rexp(n,rate = 6)
-  scores = scores/max(scores)                                           # to makes sure it is <= 1
-  quantile_bounds = seq(0,1,length.out = bins + 1)
-  
-  bin_indices = findInterval(scores,
-                             quantile_bounds,
-                             rightmost.closed = TRUE)                   #returns the bin number for each score
-  
-  bin_weights = table(bin_indices) / n                                  #gives the proportions in the different bins
-  bin_weights_vec = as.numeric(bin_weights[as.character(bin_indices)])  #gives the bin proportion associated with each score
-  
-  examples = vector("list",n)
-  
-  for (i in seq_len(n)) {
-    ex <- new_validation_example(
-      filename = paste0("file_", sample(1:10, 1), ".wav"),
-      timestamp_offset = runif(1, 0, 60),
-      score = scores[i],
-      is_pos = sample(c(1, -1, 0), 1, prob = c(0.10, 0.80, 0.10)),
-      bin = bin_indices[i],
-      bin_weight = bin_weights_vec[i]
-    )
-    examples[[i]] <- ex
-  }
-  return(examples)
-}
+# === STEP 3: Combine all files ===
+combined <- bind_rows(data_all)
 
-#Fake datasets
-fdata = generate_fake_validation_data(n = 1000,bins= 5)
-fdata2 = generate_fake_validation_data2(n = 1000,bins= 5)
-study_level_data = rbind(fdata,fdata2)
+#converting the columns to the right data
+combined$Confidence = as.double(combined$Confidence)
+write_csv(combined, output_file)
+
 
 #------------------------------ real data set ----------------------------------
-validation_data = read_csv("Abyssinian Nightjar validation results.csv") 
+strata1 = read_csv("combinedhz48Khz.csv") 
+strata2 = read_csv("combinedhz32Khz.csv")
 
-validation_data1 = read_csv("African Dusky Flycatcher validation results Grid 2.csv")
+strata1 = rename(strata1,score = Confidence)
+strata2 = rename(strata2,score = Confidence)
+strata1$SamplingRate = 48
+strata2$SamplingRate = 32
+
+study_level_data = rbind(strata1,strata2)
+study_level_data$logit_conf = log(study_level_data$score)
 
 
+#######################  choosing species  #####################################
+species = function(species_name){
+  study_level_data = filter(study_level_data,`Common Name` == species_name)
+  strata1 = filter(strata1, `Common Name` == species_name)
+  strata2 = filter(strata2, `Common Name` == species_name)
+  
+  return(list(study_level_data = study_level_data,
+              strata1 = strata1,
+              strata2 = strata2))
+}
 
-validation_data$outcome = sample(c(1,-1,0),nrow(validation_data), replace = T)
-validation_data = rename(validation_data,score = confidence)
+species_choice = species("African Pipit")
+#print(n = 1000,(distinct(study_level_data, commonName)))
 
 
 #--------visualization of the data set -------------------------------------
-Confidence.histogram = ggplot(validation_data, aes(x = score))+
+Confidence.histogram = ggplot(species_choice$study_level_data, aes(x = score))+
   geom_histogram(binwidth = 0.060, fill = "maroon", colour = "white")+
   labs(
-    title = "Histogram of Confidence Scores",
+    title = "Histogram of Confidence Scores - African Pipit",
     x = "Confidence",
     y = "Frequency"
     ) +
   theme_minimal()
 
-Logit.Confidence.histogram = ggplot(validation_data, aes(x = logit_conf))+
-  geom_histogram(binwidth = 0.60, fill = "maroon", colour = "white")+
+Logit.Confidence.histogram = ggplot(species_choice$study_level_data, aes(x = logit_conf))+
+  geom_histogram(binwidth = 0.190, fill = "maroon", colour = "white")+
   labs(
-    title = "Histogram of logit Confidence Scores",
+    title = "Histogram of logit Confidence Scores- African Pipit",
     x = "logit Confidence",
     y = "Frequency"
   ) +
   theme_minimal()
 
-ggsave("_output/confidence_histogram.jpeg",
+ggsave("_output/confidence_histogram_African Pipit.jpeg",
        plot = Confidence.histogram, 
        width = 6, 
        height = 4, 
        dpi = 300)
 
-ggsave("_output/Logit Confidence histogram.jpeg", 
+ggsave("_output/Logit Confidence histogram_African Pipit.jpeg", 
        plot = Logit.Confidence.histogram, 
        width = 6, 
        height = 4, 
@@ -133,9 +100,13 @@ ggsave("_output/Logit Confidence histogram.jpeg",
 ################################################################################
 #                                 Quantiling the dataset                       #
 ################################################################################
-#---function to return quantiles------------------------------------------------
-Quantile_function = function(examples){
-  quantiles = c(0.5,0.75,0.875)
+quantiles.3 = c(0.60,0.90)
+#quantiles.4 = c(0.3,0.25,0.125,0.125)
+#quantiles.5 = c(0.3,0.25,0.20,0.15,0.10)
+#quantiles.6 = c(0.3, 0.275, 0.175, 0.15, 7.5, 2.5)
+
+
+Quantile_function = function(examples,quantiles){
   binning.values = c()
   
   #examples = validation_data
@@ -145,11 +116,11 @@ Quantile_function = function(examples){
   }
   return(Quantiles = binning.values)
 }
-Bin.bounds = Quantile_function(validation_data)
+Bin.bounds = Quantile_function(study_level_data,quantiles.3)
 
 #bins visualized on real dataset
-binned.Logit.Confidence.histogram = ggplot(validation_data, aes(x = logit_conf))+
-  geom_histogram(binwidth = 0.60, fill = "maroon", colour = "white")+
+binned.Logit.Confidence.histogram = ggplot(species_choice$study_level_data,aes(x = logit_conf))+
+  geom_histogram(binwidth = 0.10, fill = "maroon", colour = "white")+
   geom_vline(xintercept = c(Bin.bounds), colour = "black", linewidth = 0.9)+ 
   annotate("text",
            x = c(Bin.bounds), 
@@ -157,16 +128,48 @@ binned.Logit.Confidence.histogram = ggplot(validation_data, aes(x = logit_conf))
            label = round(c(Bin.bounds),3),
            angle = 90, vjust = -0.5, hjust = +4.9) +
   labs(
-    title = "Binned Histogram of logit Confidence Scores",
+    title = "Binned Histogram of logit Confidence Scores_African Pipit",
     x = "logit confidence",
     y = "Frequency"
   ) +
   theme_minimal()
 
-ggsave("Binned logit confidence_histogram.jpeg", plot = binned.Logit.Confidence.histogram, width = 6, height = 4, dpi = 300)
+ggsave("_output/Binned logit confidence_histogram_African Pipit.jpeg",
+       plot = binned.Logit.Confidence.histogram,
+       width = 6, 
+       height = 4,
+       dpi = 300)
 
 
 
+################################################################################
+#                            Validation dataset                                #
+################################################################################
+#-------------------------validation of the dataset-----------------------------
+x <- sample(c(-1,0, 1), 
+            size = nrow(study_level_data),
+            replace = TRUE, prob = c(0.1, 0.3, 0.6))
+
+study_level_data$validation = x
+
+#-------------------------Getting the samples per bin---------------------------
+bounds = c(min(study_level_data$logit_conf),Bin.bounds, max(study_level_data$logit_conf))
+Size = 25
+
+Validated_data = data.frame()
+
+for (i in 2:length(bounds)) {
+  lower = bounds[i - 1]
+  upper = bounds[i]
+  
+  # Proper two-sided condition: use "&"
+  subset_rows = subset(study_level_data, logit_conf > lower & logit_conf <= upper)
+  sampled = sample(subset_rows$score,size = Size)
+  Validated_data = rbind(Validated_data,sampled)
+}
+
+# inspect result
+head(Validated_data)
 
 ################################################################################
 #                        Study level density estimation                        #
@@ -179,19 +182,15 @@ Study_level_call_density = function(examples,
   
   #loading in of examples data and converting it to usable format
 #-------------------binning and weighting---------------------------------------
-  examples = validation_data
+  examples = study_level_data
   quantile_bounds = Bin.bounds
-  
-  
-  nrow(filter(examples,examples$outcome==0))
-  
   
   
   bin_indices = findInterval(examples$logit_conf ,
                              quantile_bounds,
                              rightmost.closed = TRUE)+1                   #returns the bin number for each score
   
-  bin_weights = table(bin_indices) / nrow(validation_data)   #gives the proportions in the different bins
+  bin_weights = table(bin_indices) / nrow(examples)   #gives the proportions in the different bins
   bin_weights_vec = as.numeric(bin_weights[as.character(bin_indices)])  #gives the bin proportion associated with each score
   examples = cbind(examples, bin_indices,bin_weights_vec)
   
@@ -267,7 +266,7 @@ Study_level_call_density = function(examples,
 
 ########################## function implementation #############################
 
-out = Study_level_call_density(study_level_data,1000,0.1,5)  
+out = Study_level_call_density(species_choice$study_level_data,1000,0.1,5)  
 out$Density_Estimate
 out$Samples
 #--------distribution of bootstrap samples and density estimates----------------
@@ -281,12 +280,12 @@ histogram.bootstrap.estimates = ggplot(data.frame(out$Samples), aes(x = out.Samp
            label = paste0("Density Estimate = ", round(out$Density_Estimate, 3)),
            angle = 90, vjust = -0.5, hjust = 0) +
   labs(
-    title = "Histogram of density bootstrap estimates",
+    title = "Histogram of density bootstrap estimates_African Pipit",
     x = "Density estimates",
     y = "Frequency") +
   theme_minimal()
 
-ggsave("Historgram of bootstrap estimates study.jpeg",
+ggsave("_output/Historgram of bootstrap estimates study_African Pipit.jpeg",
        plot = histogram.bootstrap.estimates, 
        width = 6, 
        height = 4,
@@ -299,10 +298,21 @@ confidence_interval = quantile(out$Samples, probs=c(0.025,0.975))
 Variance_bootstrap_samples = var(out$Samples)
 Sd_bootstrap_samples = sqrt(Variance_bootstrap_samples)
 
-cat("95% Confidence interval: [",round(confidence_interval,4),"]",
-    "\nvariance: ",round(Variance_bootstrap_samples,4),
-    "\nstandard deviation: ",round(Sd_bootstrap_samples,4))
 
+results = data.frame(
+  Statistic = c("95% Confidence Interval (lower)",
+                "95% Confidence Interval (upper)",
+                "Variance",
+                "Standard Deviation"),
+  Value = c(round(confidence_interval[1], 4),
+            round(confidence_interval[2], 4),
+            round(Variance_bootstrap_samples, 4),
+            round(Sd_bootstrap_samples, 4))
+)
+
+# View as table
+latex.table.studylevel = kable(results, format = "latex")
+writeLines(latex.table.studylevel, "_output/bootstrap_summary_African Pipit.tex")
 
 
 
@@ -314,18 +324,20 @@ cat("95% Confidence interval: [",round(confidence_interval,4),"]",
 
 #sum(P(+|b)*P_s(b))
 Strat1_call_density = function(examples,
-                                num_beta_samples=1000,
+                               validation_data,
+                                num_beta_samples=2000,
                                 small_constant=0.1){
 
 #-----------Converting data set to a usable format------------------------------
+  examples = species_choice$strata2
   quantile_bounds = Bin.bounds
   
-  
-  bin_indices = findInterval(examples$logit_conf ,
+  nrow(filter(species_choice$strata2, logit_conf <2.197))
+  bin_indices = findInterval(examples$logit_conf,
                              quantile_bounds,
                              rightmost.closed = TRUE)+1                   #returns the bin number for each score
   
-  bin_weights = table(bin_indices) / nrow(validation_data)   #gives the proportions in the different bins
+  bin_weights = table(bin_indices) / nrow(examples)   #gives the proportions in the different bins
   bin_weights_vec = as.numeric(bin_weights[as.character(bin_indices)])  #gives the bin proportion associated with each score
   examples = cbind(examples, bin_indices,bin_weights_vec)
   examples = rename(examples,binNumber=bin_indices)     
@@ -353,7 +365,7 @@ Strat1_call_density = function(examples,
 
   
 #-----------------------------Bootstrapping distribution -----------------------
-  NoBetaSamples = 10000
+  NoBetaSamples = 2000
   q_betas = numeric(NoBetaSamples)
   
   for (i in seq_len(NoBetaSamples)) {
@@ -377,26 +389,47 @@ Strat1_call_density = function(examples,
 ########################## function implementation #############################
 #Implementation of strategy 1 call density  
 
-out1 = Strat1_call_density(validation_data,1000,0.1)
+out1 = Strat1_call_density(species_choice$strata1,2000,0.1)
 out1$Density_Estimate
+
+out1.1 = Strat1_call_density(species_choice$strata2,2000,0.1)
+out1.1$Density_Estimate
+
 
 #---------------Implementation of study_level call density----------------------  
 
-histogram.bootstrap.estimates.c1= ggplot(data.frame(out1$Samples), aes(x = out1.Samples))+
+histogram.bootstrap.estimates.strata1= ggplot(data.frame(out1$Samples), aes(x = out1.Samples))+
   geom_histogram(binwidth = 0.008, fill = "maroon", colour = "white")+
   geom_vline(xintercept = out1$Density_Estimate, colour = "black", linewidth = 0.9)+
   labs(
-    title = "Histogram of density bootstrap estimates cov 1",
     x = "Density estimates",
     y = "Frequency"
   ) +
   theme_minimal()
 
-ggsave("Historgram of bootstrap estimates cov 1.jpeg", 
-       plot = histogram.bootstrap.estimates.c1,
+
+histogram.bootstrap.estimates.strata2= ggplot(data.frame(out1.1$Samples), aes(x = out1.1.Samples))+
+  geom_histogram(binwidth = 0.008, fill = "maroon", colour = "white")+
+  geom_vline(xintercept = out1.1$Density_Estimate, colour = "black", linewidth = 0.9)+
+  labs(
+    x = "Density estimates",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+
+ histogram.bootstrap.estimates.stratas = grid.arrange(histogram.bootstrap.estimates.strata1,
+             histogram.bootstrap.estimates.strata2,
+             top = textGrob("Strategy 1 bootstrap estimates_African Pipit", gp = gpar(fontsize = 16, fontface = "bold")),
+             ncol = 2)
+
+ggsave("_output/histogram bootstrap estimates stratas strategy1_African Pipit.jpeg", 
+       plot =  histogram.bootstrap.estimates.stratas,
        width = 6,
        height = 4,
        dpi = 300)
+
+
 
 
 #--------------------95% bootstrap CI, std and variance  -----------------------
@@ -404,9 +437,52 @@ confidence_interval = quantile(out1$Samples, probs=c(0.025,0.975))
 Variance_bootstrap_samples = var(out1$Samples)
 Sd_bootstrap_samples = sqrt(Variance_bootstrap_samples)
 
-cat("95% Confidence interval: [",round(confidence_interval,4),"]",
-    "\nvariance: ",round(Variance_bootstrap_samples,4),
-    "\nstandard deviation: ",round(Sd_bootstrap_samples,4))
+
+results = data.frame(
+  Statistic = c("95% Confidence Interval (lower)",
+                "95% Confidence Interval (upper)",
+                "Variance",
+                "Standard Deviation",
+                "Density Estimate"),
+  Value = c(round(confidence_interval[1], 4),
+            round(confidence_interval[2], 4),
+            round(Variance_bootstrap_samples, 4),
+            round(Sd_bootstrap_samples, 4),
+            round(out1$Density_Estimate,4))
+)
+
+
+confidence_interval1.1 = quantile(out1.1$Samples, probs=c(0.025,0.975))
+Variance_bootstrap_samples1.1 = var(out1.1$Samples)
+Sd_bootstrap_samples1.1 = sqrt(Variance_bootstrap_samples1.1)
+
+
+results1.1 = data.frame(
+  Statistic = c("95% Confidence Interval (lower)",
+                "95% Confidence Interval (upper)",
+                "Variance",
+                "Standard Deviation",
+                "Density Estimate"),
+  Value = c(round(confidence_interval1.1[1], 4),
+            round(confidence_interval1.1[2], 4),
+            round(Variance_bootstrap_samples1.1, 4),
+            round(Sd_bootstrap_samples1.1, 4),
+            round(out1.1$Density_Estimate,4))
+)
+
+
+side_by_side <- data.frame(
+  Statistic = results$Statistic,
+  Stratum_1 = results$Value,
+  Stratum_2 = results1.1$Value
+)
+
+side_by_side
+
+
+# View as table
+latex.table.strat1 = kable(side_by_side, format = "latex")
+writeLines(latex.table.strat1, "_output/bootstrap_summary_strat1_African Pipit.tex")
 
 
 ################################################################################
@@ -415,7 +491,8 @@ cat("95% Confidence interval: [",round(confidence_interval,4),"]",
 #---------Strategy 2------------------------------------------------------------
 Strat2_call_density = function(site_examples, 
                                study_fit = out,
-                               eps = 1e-12,small_constant= 0.1) {
+                               eps = 1e-12,
+                               small_constant= 0.1) {
   
 
 #---------------------------Binning data and format-----------------------------
@@ -426,7 +503,7 @@ Strat2_call_density = function(site_examples,
                              quantile_bounds,
                              rightmost.closed = TRUE)+1                         #returns the bin number for each score
   
-  bin_weights = table(bin_indices) / nrow(validation_data)                      #gives the proportions in the different bins
+  bin_weights = table(bin_indices) / nrow(site_examples)                      #gives the proportions in the different bins
   bin_weights_vec = as.numeric(bin_weights[as.character(bin_indices)])          #gives the bin proportion associated with each score
   site_examples = cbind(site_examples, bin_indices,bin_weights_vec)
   site_examples = rename(site_examples,binNumber=bin_indices)     
@@ -496,11 +573,16 @@ Strat2_call_density = function(site_examples,
 
 #-----------------------------Bootstrapping ------------------------------------
 
-bootstrap_strat2_site = function(site_examples, study_fit ,Bdraws = 2000,conf = 0.95,eps = 1e-12) {
+bootstrap_strat2_site = function(site_examples, study_fit ,
+                                 Bdraws = 2000,
+                                 conf = 0.95,
+                                 eps = 1e-12) {
   
   #site_examples=validation_data
   n = nrow(site_examples)
-  point = Strat2_call_density(site_examples, study_fit = study_fit, eps = eps)$Stat2_density_estimate
+  point = Strat2_call_density(site_examples,
+                              study_fit = study_fit,
+                              eps = eps)$Stat2_density_estimate
   boots = Bdraws
   
   for (b in seq_len(Bdraws)) {
@@ -512,7 +594,8 @@ bootstrap_strat2_site = function(site_examples, study_fit ,Bdraws = 2000,conf = 
   ci = as.numeric(quantile(unlist(boots), probs = c(alpha, 1 - alpha)))
   
   
-  return(list(Density_estimate = point, se = sd(boots),
+  return(list(Density_estimate = point, 
+              se = sd(boots),
               conf_int = ci, 
               Samples = boots, 
               conf = conf))
@@ -521,39 +604,140 @@ bootstrap_strat2_site = function(site_examples, study_fit ,Bdraws = 2000,conf = 
 
 ########################## function implementation #############################
 
-out2.density = Strat2_call_density(validation_data,study_fit = out,eps = 1e-12)
-out2 = bootstrap_strat2_site(validation_data,out,Bdraws = 2000, conf = 0.95, eps = 1e-12)
+out2.density = Strat2_call_density(strata1,
+                                   study_fit = out,
+                                   eps = 1e-12)
+out2.2.density = Strat2_call_density(strata2,
+                                   study_fit = out,
+                                   eps = 1e-12)
+
+out2 = bootstrap_strat2_site(strata1,out,Bdraws = 2000,
+                             conf = 0.95,
+                             eps = 1e-12)
+out2.2 = bootstrap_strat2_site(strata2,out,Bdraws = 2000,
+                             conf = 0.95,
+                             eps = 1e-12)
 
 #---------implementation of strategy 1 density estimation (site)----------------
 
 histogram.bootstrap.estimates.s2= ggplot(data.frame(out2$Samples), aes(x = out2.Samples))+
-  geom_histogram(binwidth = 0.009, fill = "maroon", colour = "white")+
+  geom_histogram(binwidth = 0.0014, fill = "maroon", colour = "white")+
   geom_vline(xintercept = out2.density$Stat2_density_estimate, colour = "black", linewidth = 0.9)+
   labs(
-    title = "Histogram of density bootstrap estimates s2",
     x = "Density estimates",
     y = "Frequency"
   ) +
   theme_minimal()
 
-ggsave("Historgram of bootstrap estimates s2.jpeg", 
-       plot = histogram.bootstrap.estimates.s2, 
+histogram.bootstrap.estimates.s2.2= ggplot(data.frame(out2.2$Samples), aes(x = out2.2.Samples))+
+  geom_histogram(binwidth = 0.0014, fill = "maroon", colour = "white")+
+  geom_vline(xintercept = out2.2.density$Stat2_density_estimate, colour = "black", linewidth = 0.9)+
+  labs(
+    x = "Density estimates",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+
+histogram.bootstrap.estimates.strategy2 = grid.arrange(histogram.bootstrap.estimates.s2,
+                                                     histogram.bootstrap.estimates.s2.2,
+                                                     top = textGrob("Strategy 2 bootstrap Distribution_African Pipit",gp = gpar(fontsize = 16, fontface = "bold")),
+                                                     ncol = 2)
+
+
+ggsave("_output/Historgram of bootstrap estimates strategy2_African Pipit.jpeg", 
+       plot = histogram.bootstrap.estimates.strategy2, 
        width = 6,
        height = 4,
        dpi = 300)
 
+
+
+#--------------------95% bootstrap CI, std and variance  -----------------------
+confidence_interval = quantile(out2$Samples, probs=c(0.025,0.975))
+Variance_bootstrap_samples = var(out2$Samples)
+Sd_bootstrap_samples = sqrt(Variance_bootstrap_samples)
+
+
+results = data.frame(
+  Statistic = c("95% Confidence Interval (lower)",
+                "95% Confidence Interval (upper)",
+                "Variance",
+                "Standard Deviation",
+                "Density Estimate"),
+  Value = c(round(confidence_interval[1], 4),
+            round(confidence_interval[2], 4),
+            round(Variance_bootstrap_samples, 4),
+            round(Sd_bootstrap_samples, 4),
+            round(out2.density$Stat2_density_estimate,4))
+)
+
+
+confidence_interval2.2 = quantile(out2.2$Samples, probs=c(0.025,0.975))
+Variance_bootstrap_samples2.2 = var(out2.2$Samples)
+Sd_bootstrap_samples2.2 = sqrt(Variance_bootstrap_samples2.2)
+
+
+results2.2 = data.frame(
+  Statistic = c("95% Confidence Interval (lower)",
+                "95% Confidence Interval (upper)",
+                "Variance",
+                "Standard Deviation",
+                "Density Estimate"),
+  Value = c(round(confidence_interval1.1[1], 4),
+            round(confidence_interval1.1[2], 4),
+            round(Variance_bootstrap_samples1.1, 4),
+            round(Sd_bootstrap_samples1.1, 4),
+            round(out2.2.density$Stat2_density_estimate,4))
+)
+
+
+side_by_side <- data.frame(
+  Statistic = results$Statistic,
+  Stratum_1 = results$Value,
+  Stratum_2 = results2.2$Value
+)
+
+side_by_side
+
+
+# View as table
+latex.table.strat1 = kable(side_by_side, format = "latex")
+writeLines(latex.table.strat1, "_output/bootstrap_summary_strat2_African Pipit.tex")
+
+
+
+
 #-------------------------------kl divergence plot------------------------------
 
-kl.data = cbind(out2.density$qs,out2.density$KL_values)
-kl.plot = ggplot(data = data.frame(kl.data), aes(x = X1,y = X2))+
+kl.data.strata1 = cbind(out2.density$qs,out2.density$KL_values)
+kl.plot.strata1 = ggplot(data = data.frame(kl.data.strata1), aes(x = X1,y = X2))+
   geom_line()+
   geom_vline(xintercept = out2.density$Stat2_density_estimate, colour = "red")+
-  labs(title = "Plot of KL divergence",
+  labs(title = "Plot of KL divergence strata 1_African Pipit",
   x = "q values",
   y = "KL divergence") +
   theme_minimal()
 
-ggsave( "KL divergence.jpeg", plot = kl.plot, width = 6, height = 4, dpi = 300)
+kl.data.strata2 = cbind(out2.2.density$qs,out2.2.density$KL_values)
+kl.plot.strata2 = ggplot(data = data.frame(kl.data.strata2), aes(x = X1,y = X2))+
+  geom_line()+
+  geom_vline(xintercept = out2.2.density$Stat2_density_estimate, colour = "red")+
+  labs(title = "Plot of KL divergence Strata 2_African Pipit",
+       x = "q values",
+       y = "KL divergence") +
+  theme_minimal()
+
+
+KL.strategy2 = grid.arrange(kl.plot.strata1,
+                            kl.plot.strata2,
+                            ncol = 2)
+
+ggsave( "_output/KL divergences_African Pipit.jpeg", 
+        plot = KL.strategy2, 
+        width = 6,
+        height = 4, 
+        dpi = 300)
 
 
 ################################################################################
@@ -569,20 +753,12 @@ Strat3_call_density = function(density1, density2){
 
 
 #-------------------Bootstrapping and confidence intervals----------------------
-bootstrap_strat3_site = function(site_examples,study_fit,Bdraws = 2000,conf = 0.95,eps = 1e-12) {
+bootstrap_strat3_site = function(strategy1.samples,
+                                 strategy2.samples,
+                                 conf = 0.95) {
   
 # -------------------------------- Bootstrap samples ---------------------------
-  #site_examples = validation_data
-  study_fit = out
-  
-  n = nrow(site_examples)
-  boots = numeric(Bdraws)
-  for (b in seq_len(Bdraws)) {
-    s1 = Strat1_call_density(site_examples,10000,0.1)$Density_Estimate
-    s2 = Strat2_call_density(site_examples,study_fit = out,eps = 1e-12, small_constant = 0.1)$Stat2_density_estimate
-    boots[b] = sqrt(s1 * s2)
-  }
-  
+  boots = (strategy1.samples*strategy2.samples)^(1/2)
   
 #------------------------95% Confidence interval--------------------------------
   alpha = (1 - conf) / 2
@@ -590,37 +766,110 @@ bootstrap_strat3_site = function(site_examples,study_fit,Bdraws = 2000,conf = 0.
  
   
 #------------------------output of the function---------------------------------    
-  return(list(samples = boots, se = sd(boots), conf_int = ci, conf = conf))
+  return(list(samples = boots,
+              se = sd(boots),
+              conf_int = ci, 
+              conf = conf))
 }
 
 ########################## function implementation #############################
 
-out3.1 = Strat3_call_density(Strat1_call_density(validation_data,num_beta_samples=1000,
+out3.strata1 = Strat3_call_density(Strat1_call_density(strata1,num_beta_samples=1000,
+                                                       small_constant=0.1)$Density_Estimate,
+                                   Strat2_call_density(strata1,study_fit = out,
+                                                       eps = 1e-12, small_constant = 0.1)$Stat2_density_estimate)
+
+
+out3.strata2 = Strat3_call_density(Strat1_call_density(strata2,num_beta_samples=1000,
                                                  small_constant=0.1)$Density_Estimate,
-                    Strat2_call_density(validation_data,study_fit = out,
-                                        eps = 1e-12, small_constant = 0.1)$Stat2_density_estimate)
+                                   Strat2_call_density(strata2,study_fit = out,
+                                                       eps = 1e-12, small_constant = 0.1)$Stat2_density_estimate)
 
-out3 = bootstrap_strat3_site(validation_data,out,Bdraws = 200,conf = 0.95,eps = 1e-12)
 
-histogram.bootstrap.estimates.s3= ggplot(data.frame(out3$samples), aes(x = out3.samples))+
+out3.B.strata1 = bootstrap_strat3_site(out1$Samples,out2$Samples,conf = 0.95)
+out3.B.strata2 = bootstrap_strat3_site(out1.1$Samples,out2.2$Samples,conf = 0.95)
+
+
+histogram.bootstrap.strategy3= ggplot(data.frame(out3.B.strata1$samples), aes(x = out3.B.strata1$samples))+
   geom_histogram(binwidth = 0.005, fill = "maroon", colour = "white")+
-  geom_vline(xintercept = out3.1, colour = "black",linewidth = 0.9)+
-  labs(
-    title = "Histogram of density bootstrap estimates s3",
-    x = "Density estimates",
-    y = "Frequency"
-  ) +
+  geom_vline(xintercept = out3.strata1, colour = "black",linewidth = 0.9)+
+  labs(x = "Density estimates",
+       y = "Frequency") +
   theme_minimal()
 
-ggsave("Historgram of bootstrap estimates s3.jpeg",
-       plot = histogram.bootstrap.estimates.s3, 
+histogram.bootstrap.strategy3.1= ggplot(data.frame(out3.B.strata2$samples), aes(x = out3.B.strata2$samples))+
+  geom_histogram(binwidth = 0.005, fill = "maroon", colour = "white")+
+  geom_vline(xintercept = out3.strata2, colour = "black",linewidth = 0.9)+
+  labs(x = "Density estimates",
+       y = "Frequency") +
+  theme_minimal()
+
+
+Strategy3.distribution = grid.arrange(histogram.bootstrap.strategy3,
+                            histogram.bootstrap.strategy3.1,
+                            top = textGrob("Strategy 3 bootstrap distribution_African Pipit",
+                                           gp = gpar(fontsize = 16, fontface = "bold")),
+                            ncol = 2)
+
+ggsave("_output/Historgram of bootstrap distribution strategy 3_African Pipit.jpeg",
+       plot = Strategy3.distribution, 
        width = 6,
        height = 4,
        dpi = 300)
+#------------------------------95% Confidence ----------------------------------
+
+confidence_interval = quantile(out3.B.strata1$samples, probs=c(0.025,0.975))
+Variance_bootstrap_samples = var(out3.B.strata1$samples)
+Sd_bootstrap_samples = sqrt(Variance_bootstrap_samples)
 
 
+results = data.frame(
+  Statistic = c("95% Confidence Interval (lower)",
+                "95% Confidence Interval (upper)",
+                "Variance",
+                "Standard Deviation",
+                "Density Estimate"),
+  Value = c(round(confidence_interval[1], 4),
+            round(confidence_interval[2], 4),
+            round(Variance_bootstrap_samples, 4),
+            round(Sd_bootstrap_samples, 4),
+            round(out3.strata1,4))
+)
 
 
+confidence_interval3.3 = quantile(out3.B.strata2$samples, probs=c(0.025,0.975))
+Variance_bootstrap_samples3.3 = var(out3.B.strata2$samples)
+Sd_bootstrap_samples3.3 = sqrt(Variance_bootstrap_samples3.3)
 
 
+results3.3 = data.frame(
+  Statistic = c("95% Confidence Interval (lower)",
+                "95% Confidence Interval (upper)",
+                "Variance",
+                "Standard Deviation",
+                "Density Estimate"),
+  Value = c(round(confidence_interval1.1[1], 4),
+            round(confidence_interval1.1[2], 4),
+            round(Variance_bootstrap_samples1.1, 4),
+            round(Sd_bootstrap_samples1.1, 4),
+            round(out3.strata2,4))
+)
 
+
+side_by_side <- data.frame(
+  Statistic = results$Statistic,
+  Stratum_1 = results$Value,
+  Stratum_2 = results3.3$Value
+)
+
+side_by_side
+
+
+# View as table
+latex.table.strat1 = kable(side_by_side, format = "latex")
+writeLines(latex.table.strat1, "_output/bootstrap_summary_strat3_African Pipit.tex")
+
+
+################################################################################
+#                                Bin number play                               #
+################################################################################
