@@ -46,7 +46,7 @@ strata1$SamplingRate = 48
 strata2$SamplingRate = 32
 
 study_level_data = rbind(strata1,strata2)
-study_level_data$logit_conf = log(study_level_data$score)
+study_level_data$logit_conf = log(study_level_data$score) 
 
 
 #######################  choosing species  #####################################
@@ -61,14 +61,13 @@ species = function(species_name){
 }
 
 species_choice = species("African Pipit")
-#print(n = 1000,(distinct(study_level_data, commonName)))
 
 
 #--------visualization of the data set -------------------------------------
 Confidence.histogram = ggplot(species_choice$study_level_data, aes(x = score))+
   geom_histogram(binwidth = 0.060, fill = "maroon", colour = "white")+
   labs(
-    title = "Histogram of Confidence Scores - African Pipit",
+    title = "Histogram of all Confidence Scores - African Pipit",
     x = "Confidence",
     y = "Frequency"
     ) +
@@ -77,7 +76,7 @@ Confidence.histogram = ggplot(species_choice$study_level_data, aes(x = score))+
 Logit.Confidence.histogram = ggplot(species_choice$study_level_data, aes(x = logit_conf))+
   geom_histogram(binwidth = 0.190, fill = "maroon", colour = "white")+
   labs(
-    title = "Histogram of logit Confidence Scores- African Pipit",
+    title = "Histogram of all logit Confidence Scores- African Pipit",
     x = "logit Confidence",
     y = "Frequency"
   ) +
@@ -98,25 +97,26 @@ ggsave("_output/Logit Confidence histogram_African Pipit.jpeg",
 
 
 ################################################################################
-#                                 Quantiling the dataset                       #
+#                                 Quantiling the dataset  by logits            #
 ################################################################################
 quantiles.3 = c(0.60,0.90)
+
 #quantiles.4 = c(0.3,0.25,0.125,0.125)
 #quantiles.5 = c(0.3,0.25,0.20,0.15,0.10)
 #quantiles.6 = c(0.3, 0.275, 0.175, 0.15, 7.5, 2.5)
 
 
 Quantile_function = function(examples,quantiles){
-  binning.values = c()
+  binning.values = c()                                  #initial empty binning dataset
   
-  #examples = validation_data
+  examples = species_choice$study_level_data
   logits = sort(examples$logit_conf)
   for (i in 1:length(quantiles)){
     binning.values = c(binning.values,quantile(logits,quantiles[i]))
   }
   return(Quantiles = binning.values)
 }
-Bin.bounds = Quantile_function(study_level_data,quantiles.3)
+Bin.bounds = Quantile_function(species_choice$study_level_data,quantiles.3)
 
 #bins visualized on real dataset
 binned.Logit.Confidence.histogram = ggplot(species_choice$study_level_data,aes(x = logit_conf))+
@@ -147,14 +147,17 @@ ggsave("_output/Binned logit confidence_histogram_African Pipit.jpeg",
 ################################################################################
 #-------------------------validation of the dataset-----------------------------
 x <- sample(c(-1,0, 1), 
-            size = nrow(study_level_data),
+            size = nrow(species_choice$study_level_data),
             replace = TRUE, prob = c(0.1, 0.3, 0.6))
 
-study_level_data$validation = x
+species_choice$study_level_data$outcome = x
 
 #-------------------------Getting the samples per bin---------------------------
-bounds = c(min(study_level_data$logit_conf),Bin.bounds, max(study_level_data$logit_conf))
-Size = 25
+#Size = 25
+validation.data = function(Bin.bounds,Size, dataset){
+
+bounds = c(min(species_choice$study_level_data$logit_conf),Bin.bounds, max(species_choice$study_level_data$logit_conf))
+#Size = 25
 
 Validated_data = data.frame()
 
@@ -163,122 +166,137 @@ for (i in 2:length(bounds)) {
   upper = bounds[i]
   
   # Proper two-sided condition: use "&"
-  subset_rows = subset(study_level_data, logit_conf > lower & logit_conf <= upper)
-  sampled = sample(subset_rows$score,size = Size)
+  #The dataset parameter comes from the parameters and is used to pick study level or strata level 
+  subset_rows = subset(dataset, logit_conf > lower & logit_conf <= upper)
+  if(nrow(subset_rows)<Size){
+    sampled = subset_rows[sample(nrow(subset_rows), Size, replace = T), ]
+  }else{
+    sampled = subset_rows[sample(nrow(subset_rows), Size), ]
+  }
   Validated_data = rbind(Validated_data,sampled)
 }
+return(Validated_data)
+}
+validated.data = validation.data(Bin.bounds,Size = 25, species_choice$study_level_data)
 
-# inspect result
-head(Validated_data)
 
 ################################################################################
 #                        Study level density estimation                        #
 ################################################################################
 
 Study_level_call_density = function(examples,
-                                    num_beta_samples=1000,
-                                    small_constant=0.1,
-                                    bins = 5){
+                                    num_beta_samples = 1000,
+                                    small_constant = 0.1,
+                                    quantile_bounds){
   
   #loading in of examples data and converting it to usable format
 #-------------------binning and weighting---------------------------------------
-  examples = study_level_data
-  quantile_bounds = Bin.bounds
+  #examples = validated.data
+  quantile_bounds = Bin.bounds   # e.g. c("60%" = -0.93496400, "90%" = -0.09486028)
+  #bounds come from the unvalidated data
+  bounds = as.numeric(c(min(species_choice$study_level_data$logit_conf),
+             Bin.bounds,
+             max(species_choice$study_level_data$logit_conf)))
   
+  #counts in each bin
+  pos.neg.neu = matrix(NA,nrow = length(Bin.bounds)+1, ncol = 3)
+  rownames(pos.neg.neu) = c("Positive", "Negative", "Unknown")
+  colnames(pos.neg.neu) <- paste0("Bin", 1:(length(bounds) - 1))
+  pos.neg.neu
   
-  bin_indices = findInterval(examples$logit_conf ,
-                             quantile_bounds,
-                             rightmost.closed = TRUE)+1                   #returns the bin number for each score
+  #allocating to pos.neg.neu
+  for(i in 2:length(bounds)){
+    subset_rows = subset(examples,
+                          logit_conf >= bounds[i - 1] &
+                            logit_conf <= bounds[i])
+    
+      pos.neg.neu["Positive",i-1] = sum(subset_rows$outcome==1)
+      pos.neg.neu["Negative",i-1] = sum(subset_rows$outcome==-1)
+      pos.neg.neu["Unknown",i-1] = sum(subset_rows$outcome==0)
+  }
   
-  bin_weights = table(bin_indices) / nrow(examples)   #gives the proportions in the different bins
-  bin_weights_vec = as.numeric(bin_weights[as.character(bin_indices)])  #gives the bin proportion associated with each score
-  examples = cbind(examples, bin_indices,bin_weights_vec)
+  #bin weights
+  bin.weights = matrix(NA, nrow = ncol(pos.neg.neu), ncol = 1)
+  rownames(bin.weights) = paste0("Bin", 1:(length(bounds) - 1))
+  colnames(bin.weights) = "weights"
+  bin.weights
   
-  examples = rename(examples,binNumber=bin_indices)     
+  proportions.pos.neg.neu = rowSums(pos.neg.neu)/sum(rowSums(pos.neg.neu))
+  matrix.proportions.row = pos.neg.neu/rowSums(pos.neg.neu)
+  
+  for(i in 1:ncol(pos.neg.neu)){
+    bin.weights[i,] = matrix.proportions.row[1,i]*proportions.pos.neg.neu[1] +
+      matrix.proportions.row[2,i]*proportions.pos.neg.neu[2]
+  }
 
- 
-#--------------------- Binning and bin weighting -------------------------------
-  
-  #Positive/negative bin counts
-  bin_number  = as.matrix(distinct(examples,binNumber)) 
-  bin_number = as.matrix(sort(as.numeric(as.vector(bin_number[,1]))))
-  bin_weights = matrix(NA, nrow = nrow(bin_number),ncol=1)
-  bin_positive = matrix(NA,nrow = nrow(bin_number), ncol = 2)
-  bin_negative = matrix(NA,nrow = nrow(bin_number), ncol = 2)
-  
-  #Bin weights
-  for(i in 1:nrow(bin_number)){
-    bin_weights[i,1]=nrow(filter(examples,binNumber==i))/nrow(examples)
-  }
-  
-  #Putting in the counts of each bin (positive/negative)
-  for(i in 1:nrow(bin_number)){
-    examples2 = filter(examples,binNumber==i)
-    bin_positive[i,2] = as.numeric(count(filter(examples2,outcome==1)))
-    bin_negative[i,2] = as.numeric(count(filter(examples2,outcome==-1)))
-  }
-  bin_positive[,1]=bin_number ; bin_negative[,1] = bin_number
-  
 
 #--------------------------Density  estimation----------------------------------
-  # Create beta distributions for each bin.
-  shape.parameters = matrix(NA,ncol=2,nrow=nrow(bin_number))
   
-  for (b in bin_number){
-    shape.parameters[b,] = c(bin_positive[b,2] + small_constant,
-                             bin_negative[b,2] + small_constant)
+  # Create beta distributions for each bin.
+  shape.parameters = matrix(NA,ncol=2,nrow=ncol(pos.neg.neu))
+  
+  for (i in 1:ncol(pos.neg.neu)){
+    shape.parameters[i,] = c(pos.neg.neu[1,i] + small_constant,
+                             pos.neg.neu[2,i] + small_constant)
   }
   
   #estimating the density
-  density_matrix = matrix(NA,nrow = nrow(bin_number),ncol = 1)
+  density_matrix = matrix(NA,nrow = nrow(bin.weights),ncol = 1)
   
   for(i in 1:nrow(shape.parameters)){
     density_matrix[i,1] = ((shape.parameters[i,1]+ small_constant)/
-      ((shape.parameters[i,1]+ small_constant)+(shape.parameters[i,2] + small_constant)))*bin_weights[i,1]
+      ((shape.parameters[i,1]+ small_constant)+(shape.parameters[i,2] + small_constant)))*bin.weights[i,1]
   }
   
   density = sum(density_matrix)
-    
-  
-#-------------Bootstrapping: distribution of density estimate-------------------
-  
-  NoBetaSamples = 10000
-  q_betas = numeric(NoBetaSamples)
-  
-  for (i in seq_len(NoBetaSamples)) {
-    betas = rbeta(n = nrow(shape.parameters),
-      shape.parameters[,1] + small_constant, 
-      shape.parameters[,2] + small_constant)
-
-    q_betas[i] = sum(betas * bin_weights[,1])
-  }
-  
 #--------------------------function output -------------------------------------
   
   return(list(Density_Estimate = density,
-              Samples = q_betas, 
               beta_parameters = shape.parameters,
-              Study_level_weights = bin_weights,
-              densities = density_matrix,
-              negative_counts = bin_negative,
-              positive_counts = bin_number))
+              Study_level_weights = bin.weights,
+              bin_densities = density_matrix,
+              negative_counts = pos.neg.neu))
 }
+
+########################## Ground truth at the study ###########################
+
+sum(validated.data$outcome ==1)/nrow(validated.data)
+sum(validated.data$outcome ==-1)/nrow(validated.data)
+sum(validated.data$outcome ==0)/nrow(validated.data)
 
 ########################## function implementation #############################
 
-out = Study_level_call_density(species_choice$study_level_data,1000,0.1,5)  
+out = Study_level_call_density(validated.data,1000,0.1,Bin.bounds)  
 out$Density_Estimate
-out$Samples
+
+########################## Study level bootstrap estimates #####################
+
+study.level.bootstraps = function(number.samples){
+
+  samples = vector(length = number.samples)
+  for(i in 1:number.samples){
+  validated.data = validation.data(Bin.bounds, Size = 25)
+  out = Study_level_call_density(validated.data,1000,0.1,Bin.bounds)  
+  samples[i] = out$Density_Estimate
+  }
+  
+  return(samples)
+}
+
+study.boots = study.level.bootstraps(100000)
+
+
+
 #--------distribution of bootstrap samples and density estimates----------------
 
-histogram.bootstrap.estimates = ggplot(data.frame(out$Samples), aes(x = out.Samples))+
-  geom_histogram(binwidth = 0.008, fill = "maroon", colour = "white")+
-  geom_vline(xintercept = out$Density_Estimate, colour = "black", linewidth = 0.9)+
+histogram.bootstrap.estimates = ggplot(data.frame(study.boots), aes(x = study.boots))+
+  geom_histogram(binwidth = 0.025, fill = "maroon", colour = "white")+
+  geom_vline(xintercept = mean(study.boots,na.rm = T), colour = "black", linewidth = 0.9)+
   annotate("text",
            x = out$Density_Estimate, 
            y = 50,             # adjust this based on your y-axis scale
            label = paste0("Density Estimate = ", round(out$Density_Estimate, 3)),
-           angle = 90, vjust = -0.5, hjust = 0) +
+           angle = 90, vjust = 5, hjust = 0) +
   labs(
     title = "Histogram of density bootstrap estimates_African Pipit",
     x = "Density estimates",
@@ -292,29 +310,6 @@ ggsave("_output/Historgram of bootstrap estimates study_African Pipit.jpeg",
        dpi = 300)
 
 
-#--------------------95% bootstrap CI, std and variance  -----------------------
-
-confidence_interval = quantile(out$Samples, probs=c(0.025,0.975))
-Variance_bootstrap_samples = var(out$Samples)
-Sd_bootstrap_samples = sqrt(Variance_bootstrap_samples)
-
-
-results = data.frame(
-  Statistic = c("95% Confidence Interval (lower)",
-                "95% Confidence Interval (upper)",
-                "Variance",
-                "Standard Deviation"),
-  Value = c(round(confidence_interval[1], 4),
-            round(confidence_interval[2], 4),
-            round(Variance_bootstrap_samples, 4),
-            round(Sd_bootstrap_samples, 4))
-)
-
-# View as table
-latex.table.studylevel = kable(results, format = "latex")
-writeLines(latex.table.studylevel, "_output/bootstrap_summary_African Pipit.tex")
-
-
 
 ################################################################################
 #                Strategy 1 strata level density estimation                    #
@@ -324,83 +319,108 @@ writeLines(latex.table.studylevel, "_output/bootstrap_summary_African Pipit.tex"
 
 #sum(P(+|b)*P_s(b))
 Strat1_call_density = function(examples,
-                               validation_data,
-                                num_beta_samples=2000,
                                 small_constant=0.1){
 
 #-----------Converting data set to a usable format------------------------------
-  examples = species_choice$strata2
-  quantile_bounds = Bin.bounds
+  #validated.data = validation.data(Bin.bounds,Size = 25,filter(species_choice$study_level_data, species_choice$study_level_data$SamplingRate==48))
+  #examples = validated.data
+  quantile_bounds = Bin.bounds   # e.g. c("60%" = -0.93496400, "90%" = -0.09486028)
+  #bounds come from the unvalidated data
   
-  nrow(filter(species_choice$strata2, logit_conf <2.197))
-  bin_indices = findInterval(examples$logit_conf,
-                             quantile_bounds,
-                             rightmost.closed = TRUE)+1                   #returns the bin number for each score
+  bounds = as.numeric(c(min(species_choice$study_level_data$logit_conf),
+                        Bin.bounds,
+                        max(species_choice$study_level_data$logit_conf)))
   
-  bin_weights = table(bin_indices) / nrow(examples)   #gives the proportions in the different bins
-  bin_weights_vec = as.numeric(bin_weights[as.character(bin_indices)])  #gives the bin proportion associated with each score
-  examples = cbind(examples, bin_indices,bin_weights_vec)
-  examples = rename(examples,binNumber=bin_indices)     
+  #counts in each bin
+  pos.neg.neu = matrix(NA,nrow = length(Bin.bounds)+1, ncol = 3)
+  rownames(pos.neg.neu) = c("Positive", "Negative", "Unknown")
+  colnames(pos.neg.neu) <- paste0("Bin", 1:(length(bounds) - 1))
+  pos.neg.neu
   
-  
-  #Positive/negative bin counts
-  bin_number  = as.matrix(distinct(examples,binNumber)) 
-  bin_number = as.matrix(sort(as.numeric(as.vector(bin_number[,1]))))
-  bin_weights = matrix(NA, nrow = nrow(bin_number),ncol=1)
-  
-  #Bin weights
-  for(i in 1:nrow(bin_number)){
-    bin_weights[i,1]=nrow(filter(examples,binNumber==i))/nrow(examples)
+  #allocating to pos.neg.neu
+  for(i in 2:length(bounds)){
+    subset_rows = subset(examples,
+                         logit_conf >= bounds[i - 1] &
+                           logit_conf <= bounds[i])
+    
+    pos.neg.neu["Positive",i-1] = sum(subset_rows$outcome==1)
+    pos.neg.neu["Negative",i-1] = sum(subset_rows$outcome==-1)
+    pos.neg.neu["Unknown",i-1] = sum(subset_rows$outcome==0)
   }
+  
+  #bin weights
+  bin.weights = matrix(NA, nrow = ncol(pos.neg.neu), ncol = 1)
+  rownames(bin.weights) = paste0("Bin", 1:(length(bounds) - 1))
+  colnames(bin.weights) = "weights"
+  bin.weights
+   
+  
+  proportions.pos.neg.neu = (rowSums(pos.neg.neu)/sum(rowSums(pos.neg.neu)))
+  matrix.proportions.row = pos.neg.neu/(rowSums(pos.neg.neu)+1e-12)
+  
+  for(i in 1:ncol(pos.neg.neu)){
+    bin.weights[i,] = matrix.proportions.row[1,i]*proportions.pos.neg.neu[1] +
+      matrix.proportions.row[2,i]*proportions.pos.neg.neu[2]
+  }
+  
 
 #----------------strata level density estimation--------------------------------
-  density_matrix = matrix(NA,nrow=nrow(bin_number), ncol =1)
+  density_matrix = matrix(NA,nrow=nrow(bin.weights), ncol =1)
  
   for(i in 1:nrow(out$beta_parameters)){
     density_matrix[i,1] =  ((out$beta_parameters[i,1]+small_constant)/
-    ((out$beta_parameters[i,1]+small_constant)+(out$beta_parameters[i,2]+small_constant)))*bin_weights[i,1]
+    ((out$beta_parameters[i,1]+small_constant)+(out$beta_parameters[i,2]+small_constant)))*bin.weights[i,1]
   }
   
   density = sum(density_matrix)
-
-  
-#-----------------------------Bootstrapping distribution -----------------------
-  NoBetaSamples = 2000
-  q_betas = numeric(NoBetaSamples)
-  
-  for (i in seq_len(NoBetaSamples)) {
-    # draw a bin-level theta_b from the same Beta as the estimator
-    betas = rbeta(
-      n = nrow(out$beta_parameters),
-      shape1 = out$beta_parameters[,1] + small_constant,  
-      shape2 = out$beta_parameters[,2] + small_constant
-    )
-    
-    q_betas[i] = sum(betas * bin_weights[,1])
-  }
   
 #----------------------------------function output------------------------------
   return(list(Density_Estimate = density,
-              Samples = q_betas,
               bin_densities = density_matrix))
+}
+
+############################ Bootstrap data ####################################
+strategy1.bootstraps = function(numberSamples){
+  #numberSamples = 10
+  bootstrap.estimates.32 = vector(length = numberSamples)
+  bootstrap.estimates.48 = vector(length = numberSamples)
+  
+  #includes a function call for the sampling rate
+  for(i in 1:numberSamples){
+    validated.data = validation.data(Bin.bounds,Size = 25,filter(species_choice$study_level_data, species_choice$study_level_data$SamplingRate==32))
+    bootstrap.estimates.32[i] = Strat1_call_density(filter(validated.data,validated.data$SamplingRate==32),0.1)$Density_Estimate
+  }
+  
+  for(i in 1:numberSamples){
+    validated.data = validation.data(Bin.bounds,Size = 25,filter(species_choice$study_level_data, species_choice$study_level_data$SamplingRate==48))
+    bootstrap.estimates.48[i] = Strat1_call_density(filter(validated.data,validated.data$SamplingRate==48),0.1)$Density_Estimate
+  }
+  
+  return(list(Khz32.estimates = as.numeric(bootstrap.estimates.32),
+              Khz48.estimates = as.numeric(bootstrap.estimates.48)))
 }
 
 
 ########################## function implementation #############################
 #Implementation of strategy 1 call density  
 
-out1 = Strat1_call_density(species_choice$strata1,2000,0.1)
+validated.data = validation.data(Bin.bounds,Size = 25, species_choice$study_level_data)
+
+out1 = Strat1_call_density(filter(validated.data,validated.data$SamplingRate==32),0.1)
 out1$Density_Estimate
 
-out1.1 = Strat1_call_density(species_choice$strata2,2000,0.1)
+out1.1 = Strat1_call_density(filter(validated.data,validated.data$SamplingRate==48),0.1)
 out1.1$Density_Estimate
 
+strategy.bootstraps = strategy1.bootstraps(2000)
+hist(as.numeric(strategy.bootstraps$Khz32.estimates))
+hist(as.numeric(strategy.bootstraps$Khz48.estimates))
 
 #---------------Implementation of study_level call density----------------------  
 
-histogram.bootstrap.estimates.strata1= ggplot(data.frame(out1$Samples), aes(x = out1.Samples))+
+histogram.bootstrap.estimates.strata1= ggplot(data.frame(strategy.bootstraps$Khz32.estimates), aes(x = strategy.bootstraps$Khz32.estimates ))+
   geom_histogram(binwidth = 0.008, fill = "maroon", colour = "white")+
-  geom_vline(xintercept = out1$Density_Estimate, colour = "black", linewidth = 0.9)+
+  geom_vline(xintercept = mean(strategy.bootstraps$Khz32.estimates), colour = "black", linewidth = 0.9)+
   labs(
     x = "Density estimates",
     y = "Frequency"
@@ -408,9 +428,9 @@ histogram.bootstrap.estimates.strata1= ggplot(data.frame(out1$Samples), aes(x = 
   theme_minimal()
 
 
-histogram.bootstrap.estimates.strata2= ggplot(data.frame(out1.1$Samples), aes(x = out1.1.Samples))+
-  geom_histogram(binwidth = 0.008, fill = "maroon", colour = "white")+
-  geom_vline(xintercept = out1.1$Density_Estimate, colour = "black", linewidth = 0.9)+
+histogram.bootstrap.estimates.strata2= ggplot(data.frame(strategy.bootstraps$Khz48.estimates), aes(x = strategy.bootstraps$Khz48.estimates))+
+  geom_histogram(binwidth = 0.018, fill = "maroon", colour = "white")+
+  geom_vline(xintercept = mean(strategy.bootstraps$Khz48.estimates), colour = "black", linewidth = 0.9)+
   labs(
     x = "Density estimates",
     y = "Frequency"
@@ -431,58 +451,13 @@ ggsave("_output/histogram bootstrap estimates stratas strategy1_African Pipit.jp
 
 
 
+###################### Ground truths at the strata level #######################
+ground.truth.data.32 = filter(species_choice$study_level_data,species_choice$study_level_data$SamplingRate==32)
+ground.truth.data.48 = filter(species_choice$study_level_data,species_choice$study_level_data$SamplingRate==48)
 
-#--------------------95% bootstrap CI, std and variance  -----------------------
-confidence_interval = quantile(out1$Samples, probs=c(0.025,0.975))
-Variance_bootstrap_samples = var(out1$Samples)
-Sd_bootstrap_samples = sqrt(Variance_bootstrap_samples)
+sum(ground.truth.data.32$outcome==1)/nrow(ground.truth.data.32)
+sum(ground.truth.data.48$outcome==1)/nrow(ground.truth.data.48)
 
-
-results = data.frame(
-  Statistic = c("95% Confidence Interval (lower)",
-                "95% Confidence Interval (upper)",
-                "Variance",
-                "Standard Deviation",
-                "Density Estimate"),
-  Value = c(round(confidence_interval[1], 4),
-            round(confidence_interval[2], 4),
-            round(Variance_bootstrap_samples, 4),
-            round(Sd_bootstrap_samples, 4),
-            round(out1$Density_Estimate,4))
-)
-
-
-confidence_interval1.1 = quantile(out1.1$Samples, probs=c(0.025,0.975))
-Variance_bootstrap_samples1.1 = var(out1.1$Samples)
-Sd_bootstrap_samples1.1 = sqrt(Variance_bootstrap_samples1.1)
-
-
-results1.1 = data.frame(
-  Statistic = c("95% Confidence Interval (lower)",
-                "95% Confidence Interval (upper)",
-                "Variance",
-                "Standard Deviation",
-                "Density Estimate"),
-  Value = c(round(confidence_interval1.1[1], 4),
-            round(confidence_interval1.1[2], 4),
-            round(Variance_bootstrap_samples1.1, 4),
-            round(Sd_bootstrap_samples1.1, 4),
-            round(out1.1$Density_Estimate,4))
-)
-
-
-side_by_side <- data.frame(
-  Statistic = results$Statistic,
-  Stratum_1 = results$Value,
-  Stratum_2 = results1.1$Value
-)
-
-side_by_side
-
-
-# View as table
-latex.table.strat1 = kable(side_by_side, format = "latex")
-writeLines(latex.table.strat1, "_output/bootstrap_summary_strat1_African Pipit.tex")
 
 
 ################################################################################
@@ -497,6 +472,7 @@ Strat2_call_density = function(site_examples,
 
 #---------------------------Binning data and format-----------------------------
 
+  validated.data = validation.data(Bin.bounds,Size = 25,filter(species_choice$study_level_data, species_choice$study_level_data$SamplingRate==48))
   quantile_bounds = Bin.bounds
   
   bin_indices = findInterval(site_examples$logit_conf ,
